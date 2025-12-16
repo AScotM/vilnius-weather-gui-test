@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 
-
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
+from tkinter import ttk, scrolledtext, messagebox, font
 import threading
 import os
 import json
@@ -45,7 +44,6 @@ class WeatherAPIConfig:
         self.cache_ttl = 3600
         self.request_delay = 0.5
         self.max_cache_age_days = 7
-        self.rate_limit_per_hour = 100
 
 class FreeWeatherAPI:
     def __init__(self, city: str = "Vilnius", lat: float = 54.6872, lon: float = 25.2797, enable_cache: bool = False):
@@ -95,9 +93,8 @@ class FreeWeatherAPI:
             try:
                 if cache_file.stat().st_mtime < cutoff_time:
                     cache_file.unlink()
-                    logger.debug(f"Removed old cache file: {cache_file}")
-            except OSError as e:
-                logger.warning(f"Failed to remove cache file {cache_file}: {e}")
+            except OSError:
+                pass
 
     def _get_cache_key(self, url: str, params: Dict[str, Any]) -> str:
         if not params:
@@ -113,9 +110,8 @@ class FreeWeatherAPI:
             
         try:
             cache_file.write_text(json.dumps(data, indent=2))
-            logger.debug(f"Cached response to {cache_file}")
-        except (IOError, TypeError) as e:
-            logger.warning(f"Failed to cache response: {e}")
+        except (IOError, TypeError):
+            pass
 
     def _load_cached_response(self, cache_file: Path) -> Optional[Dict[str, Any]]:
         if not self.enable_cache:
@@ -127,17 +123,14 @@ class FreeWeatherAPI:
         try:
             file_age = time.time() - cache_file.stat().st_mtime
             if file_age < self.config.cache_ttl:
-                data = json.loads(cache_file.read_text())
-                logger.debug(f"Loaded cached response from {cache_file}")
-                return data
-        except (IOError, json.JSONDecodeError) as e:
-            logger.warning(f"Failed to load cached response: {e}")
+                return json.loads(cache_file.read_text())
+        except (IOError, json.JSONDecodeError):
+            pass
             
         return None
 
     def _make_request(self, url: str, params: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
         if not self._validate_url(url):
-            logger.error(f"Invalid URL: {url}")
             return None
 
         cache_file = None
@@ -159,15 +152,12 @@ class FreeWeatherAPI:
                 return data
                 
             except requests.exceptions.Timeout:
-                logger.debug(f"Timeout for {url}, attempt {attempt+1}")
                 if attempt == self.config.retry_attempts - 1:
                     return None
                 time.sleep(1)
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Request failed for {url}: {e}")
+            except requests.exceptions.RequestException:
                 return None
-            except ValueError as e:
-                logger.error(f"JSON decode failed for {url}: {e}")
+            except ValueError:
                 return None
         
         return None
@@ -177,14 +167,12 @@ class FreeWeatherAPI:
         
         for field in required_fields:
             if field not in data or data[field] is None:
-                logger.warning(f"Missing required field: {field}")
                 return False
         
         try:
             float(data['temperature'])
             return True
-        except (ValueError, TypeError) as e:
-            logger.warning(f"Invalid temperature value: {e}")
+        except (ValueError, TypeError):
             return False
 
     def get_open_meteo(self) -> Optional[WeatherData]:
@@ -199,13 +187,11 @@ class FreeWeatherAPI:
             
             data = self._make_request(url, params)
             if not data or 'current' not in data:
-                logger.warning("Open-Meteo API returned invalid data")
                 return None
             
             current = data['current']
             temperature = current.get('temperature_2m')
             if temperature is None:
-                logger.warning("Open-Meteo API missing temperature data")
                 return None
             
             weather_code = current.get('weather_code')
@@ -227,8 +213,7 @@ class FreeWeatherAPI:
                 return weather_data
             return None
             
-        except (ValueError, TypeError) as e:
-            logger.error(f"Open-Meteo data processing error: {e}")
+        except (ValueError, TypeError):
             return None
 
     def get_weather_api(self) -> Optional[WeatherData]:
@@ -242,13 +227,11 @@ class FreeWeatherAPI:
             
             data = self._make_request(url, params)
             if not data or 'current' not in data:
-                logger.warning("WeatherAPI returned invalid data")
                 return None
             
             current = data['current']
             temperature = current.get('temp_c')
             if temperature is None:
-                logger.warning("WeatherAPI missing temperature data")
                 return None
             
             weather_data: WeatherData = {
@@ -267,8 +250,7 @@ class FreeWeatherAPI:
                 return weather_data
             return None
             
-        except (ValueError, TypeError) as e:
-            logger.error(f"WeatherAPI data processing error: {e}")
+        except (ValueError, TypeError):
             return None
 
     def get_wttr_in(self) -> Optional[WeatherData]:
@@ -279,13 +261,11 @@ class FreeWeatherAPI:
             
             data = self._make_request(url, params)
             if not data or 'current_condition' not in data or not data['current_condition']:
-                logger.warning("wttr.in API returned invalid data")
                 return None
             
             current = data['current_condition'][0]
             temp_c = current.get('temp_C')
             if temp_c is None:
-                logger.warning("wttr.in API missing temperature data")
                 return None
             
             weather_data: WeatherData = {
@@ -304,13 +284,11 @@ class FreeWeatherAPI:
                 return weather_data
             return None
             
-        except (ValueError, TypeError) as e:
-            logger.error(f"wttr.in data processing error: {e}")
+        except (ValueError, TypeError):
             return None
 
     def get_all_weather_data(self) -> Dict[str, WeatherData]:
         results = {}
-        failed_sources = []
         
         api_functions = [
             ('Open-Meteo', self.get_open_meteo),
@@ -323,18 +301,10 @@ class FreeWeatherAPI:
                 result = api_func()
                 if result:
                     results[name] = result
-                    logger.info(f"Successfully fetched from {name}")
-                else:
-                    failed_sources.append(name)
-                    logger.warning(f"Failed to fetch from {name}")
-            except Exception as e:
-                failed_sources.append(name)
-                logger.error(f"Exception fetching from {name}: {e}")
+            except Exception:
+                pass
             
             time.sleep(self.config.request_delay)
-        
-        if failed_sources:
-            logger.info(f"Failed sources: {failed_sources}")
         
         return results
 
@@ -383,12 +353,14 @@ class WeatherAppGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Weather Dashboard")
-        self.root.geometry("1000x750")
+        self.root.geometry("1200x850")
         
-        self.bg_color = "#f0f8ff"
-        self.card_bg = "#ffffff"
-        self.accent_color = "#4a90e2"
-        self.text_color = "#333333"
+        self.bg_color = "#0f172a"
+        self.card_bg = "#1e293b"
+        self.accent_color = "#3b82f6"
+        self.secondary_color = "#10b981"
+        self.text_color = "#f8fafc"
+        self.muted_text = "#94a3b8"
         
         self.root.configure(bg=self.bg_color)
         
@@ -398,182 +370,363 @@ class WeatherAppGUI:
         self.enable_cache_var = tk.BooleanVar(value=False)
         self.is_fetching = False
         
+        self.title_font = font.Font(family="Helvetica", size=28, weight="bold")
+        self.subtitle_font = font.Font(family="Helvetica", size=12)
+        self.heading_font = font.Font(family="Helvetica", size=16, weight="bold")
+        self.body_font = font.Font(family="Helvetica", size=11)
+        self.mono_font = font.Font(family="Consolas", size=10)
+        
         self.setup_styles()
         self.create_widgets()
         
     def setup_styles(self):
         self.style = ttk.Style()
+        self.style.theme_use('clam')
         
         self.style.configure(
-            'Accent.TButton',
-            background=self.accent_color,
-            foreground='white',
-            font=('Segoe UI', 10, 'bold'),
-            padding=10
+            'Title.TLabel',
+            background=self.bg_color,
+            foreground=self.text_color,
+            font=self.title_font
+        )
+        
+        self.style.configure(
+            'Subtitle.TLabel',
+            background=self.bg_color,
+            foreground=self.muted_text,
+            font=self.subtitle_font
         )
         
         self.style.configure(
             'Card.TFrame',
             background=self.card_bg,
+            relief='flat',
+            borderwidth=0
+        )
+        
+        self.style.configure(
+            'Card.TLabelframe',
+            background=self.card_bg,
+            foreground=self.text_color,
+            relief='flat',
+            borderwidth=0
+        )
+        
+        self.style.configure(
+            'Card.TLabelframe.Label',
+            background=self.card_bg,
+            foreground=self.text_color,
+            font=self.heading_font
+        )
+        
+        self.style.configure(
+            'Primary.TButton',
+            background=self.accent_color,
+            foreground='white',
+            font=self.body_font,
+            borderwidth=0,
+            focuscolor='none',
+            padding=12
+        )
+        self.style.map('Primary.TButton',
+            background=[('active', '#2563eb'), ('disabled', '#64748b')],
+            foreground=[('disabled', '#cbd5e1')]
+        )
+        
+        self.style.configure(
+            'Secondary.TButton',
+            background=self.card_bg,
+            foreground=self.text_color,
+            font=self.body_font,
+            borderwidth=1,
             relief='solid',
-            borderwidth=1
+            padding=8
+        )
+        
+        self.style.configure(
+            'Custom.TEntry',
+            fieldbackground=self.card_bg,
+            foreground=self.text_color,
+            borderwidth=1,
+            relief='solid',
+            padding=8
+        )
+        
+        self.style.configure(
+            'Light.TLabel',
+            background=self.card_bg,
+            foreground=self.text_color,
+            font=self.body_font
+        )
+        
+        self.style.configure(
+            'Muted.TLabel',
+            background=self.card_bg,
+            foreground=self.muted_text,
+            font=self.body_font
+        )
+        
+        self.style.configure(
+            'Custom.TCheckbutton',
+            background=self.card_bg,
+            foreground=self.text_color
+        )
+        
+        self.style.configure(
+            'Custom.TNotebook',
+            background=self.bg_color,
+            borderwidth=0
+        )
+        self.style.configure(
+            'Custom.TNotebook.Tab',
+            background=self.card_bg,
+            foreground=self.muted_text,
+            padding=[15, 5],
+            font=self.body_font
+        )
+        self.style.map('Custom.TNotebook.Tab',
+            background=[('selected', self.accent_color), ('active', '#334155')],
+            foreground=[('selected', 'white'), ('active', self.text_color)]
         )
         
     def create_widgets(self):
         main_container = tk.Frame(self.root, bg=self.bg_color)
-        main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        main_container.pack(fill=tk.BOTH, expand=True, padx=30, pady=30)
         
-        title_frame = tk.Frame(main_container, bg=self.bg_color)
-        title_frame.pack(fill=tk.X, pady=(0, 20))
+        header_frame = tk.Frame(main_container, bg=self.bg_color)
+        header_frame.pack(fill=tk.X, pady=(0, 30))
         
-        title_label = tk.Label(
-            title_frame,
-            text="Weather Dashboard Pro",
-            font=('Segoe UI', 24, 'bold'),
-            bg=self.bg_color,
-            fg=self.text_color
+        title_label = ttk.Label(
+            header_frame,
+            text="Weather Dashboard",
+            style='Title.TLabel'
         )
-        title_label.pack()
+        title_label.pack(anchor=tk.W)
         
-        subtitle_label = tk.Label(
-            title_frame,
-            text="Real-time weather from multiple sources",
-            font=('Segoe UI', 12),
-            bg=self.bg_color,
-            fg='#666666'
+        subtitle_label = ttk.Label(
+            header_frame,
+            text="Real-time weather data from multiple sources",
+            style='Subtitle.TLabel'
         )
-        subtitle_label.pack()
+        subtitle_label.pack(anchor=tk.W)
         
-        control_card = ttk.Frame(main_container, style='Card.TFrame', padding=20)
-        control_card.pack(fill=tk.X, pady=(0, 20))
+        content_container = tk.Frame(main_container, bg=self.bg_color)
+        content_container.pack(fill=tk.BOTH, expand=True)
         
-        tk.Label(
-            control_card,
+        left_column = tk.Frame(content_container, bg=self.bg_color, width=350)
+        left_column.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 20))
+        left_column.pack_propagate(False)
+        
+        control_card = ttk.LabelFrame(
+            left_column,
             text="Location Settings",
-            font=('Segoe UI', 14, 'bold'),
-            bg=self.card_bg,
-            fg=self.text_color
-        ).pack(anchor=tk.W, pady=(0, 15))
+            style='Card.TLabelframe',
+            padding=25
+        )
+        control_card.pack(fill=tk.BOTH, pady=(0, 20))
         
-        input_grid = tk.Frame(control_card, bg=self.card_bg)
-        input_grid.pack(fill=tk.X)
+        city_frame = tk.Frame(control_card, bg=self.card_bg)
+        city_frame.pack(fill=tk.X, pady=(0, 15))
         
-        tk.Label(
-            input_grid,
-            text="City:",
-            font=('Segoe UI', 10),
-            bg=self.card_bg,
-            fg=self.text_color
-        ).grid(row=0, column=0, sticky=tk.W, pady=5, padx=(0, 10))
+        ttk.Label(
+            city_frame,
+            text="City Name",
+            style='Muted.TLabel'
+        ).pack(anchor=tk.W)
         
         city_entry = ttk.Entry(
-            input_grid,
+            city_frame,
             textvariable=self.city_var,
-            font=('Segoe UI', 10),
-            width=30
+            style='Custom.TEntry',
+            font=self.body_font
         )
-        city_entry.grid(row=0, column=1, sticky=tk.W, pady=5)
+        city_entry.pack(fill=tk.X, pady=(5, 0))
         
-        tk.Label(
-            input_grid,
-            text="Latitude:",
-            font=('Segoe UI', 10),
-            bg=self.card_bg,
-            fg=self.text_color
-        ).grid(row=1, column=0, sticky=tk.W, pady=5, padx=(0, 10))
+        coord_frame = tk.Frame(control_card, bg=self.card_bg)
+        coord_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        ttk.Label(
+            coord_frame,
+            text="Coordinates",
+            style='Muted.TLabel'
+        ).pack(anchor=tk.W, pady=(0, 10))
+        
+        coord_grid = tk.Frame(coord_frame, bg=self.card_bg)
+        coord_grid.pack(fill=tk.X)
+        
+        lat_container = tk.Frame(coord_grid, bg=self.card_bg)
+        lat_container.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        
+        ttk.Label(
+            lat_container,
+            text="Latitude",
+            style='Muted.TLabel'
+        ).pack(anchor=tk.W)
         
         lat_entry = ttk.Entry(
-            input_grid,
+            lat_container,
             textvariable=self.lat_var,
-            font=('Segoe UI', 10),
-            width=15
+            style='Custom.TEntry',
+            font=self.body_font
         )
-        lat_entry.grid(row=1, column=1, sticky=tk.W, pady=5)
+        lat_entry.pack(fill=tk.X, pady=(5, 0))
         
-        tk.Label(
-            input_grid,
-            text="Longitude:",
-            font=('Segoe UI', 10),
-            bg=self.card_bg,
-            fg=self.text_color
-        ).grid(row=2, column=0, sticky=tk.W, pady=5, padx=(0, 10))
+        lon_container = tk.Frame(coord_grid, bg=self.card_bg)
+        lon_container.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        ttk.Label(
+            lon_container,
+            text="Longitude",
+            style='Muted.TLabel'
+        ).pack(anchor=tk.W)
         
         lon_entry = ttk.Entry(
-            input_grid,
+            lon_container,
             textvariable=self.lon_var,
-            font=('Segoe UI', 10),
-            width=15
+            style='Custom.TEntry',
+            font=self.body_font
         )
-        lon_entry.grid(row=2, column=1, sticky=tk.W, pady=5)
+        lon_entry.pack(fill=tk.X, pady=(5, 0))
+        
+        cache_frame = tk.Frame(control_card, bg=self.card_bg)
+        cache_frame.pack(fill=tk.X, pady=(0, 25))
         
         cache_check = ttk.Checkbutton(
-            control_card,
+            cache_frame,
             text="Enable API Response Caching",
-            variable=self.enable_cache_var
+            variable=self.enable_cache_var,
+            style='Custom.TCheckbutton'
         )
-        cache_check.pack(anchor=tk.W, pady=(10, 0))
+        cache_check.pack(anchor=tk.W)
         
         self.fetch_btn = ttk.Button(
             control_card,
-            text="Fetch Weather Data",
+            text="FETCH WEATHER DATA",
             command=self.fetch_weather,
-            style='Accent.TButton'
+            style='Primary.TButton',
+            cursor='hand2'
         )
-        self.fetch_btn.pack(pady=(20, 0))
+        self.fetch_btn.pack(fill=tk.X, pady=(0, 15))
         
         self.progress = ttk.Progressbar(
             control_card,
             mode='indeterminate',
-            length=200
+            style='Custom.Horizontal.TProgressbar'
         )
-        self.progress.pack(pady=(10, 0))
+        self.progress.pack(fill=tk.X)
         
-        display_container = tk.Frame(main_container, bg=self.bg_color)
-        display_container.pack(fill=tk.BOTH, expand=True)
+        info_card = tk.Frame(left_column, bg=self.card_bg, padx=25, pady=25)
+        info_card.pack(fill=tk.BOTH)
         
-        self.notebook = ttk.Notebook(display_container)
+        ttk.Label(
+            info_card,
+            text="Weather Sources",
+            style='Light.TLabel',
+            font=self.heading_font
+        ).pack(anchor=tk.W, pady=(0, 15))
+        
+        sources = [
+            ("Open-Meteo", "Free weather API with global coverage"),
+            ("WeatherAPI", "Commercial API with demo access"),
+            ("wttr.in", "Popular terminal weather service")
+        ]
+        
+        for source, description in sources:
+            source_frame = tk.Frame(info_card, bg=self.card_bg)
+            source_frame.pack(fill=tk.X, pady=(0, 10))
+            
+            ttk.Label(
+                source_frame,
+                text=source,
+                style='Light.TLabel',
+                font=('Helvetica', 11, 'bold')
+            ).pack(anchor=tk.W)
+            
+            ttk.Label(
+                source_frame,
+                text=description,
+                style='Muted.TLabel',
+                font=('Helvetica', 9)
+            ).pack(anchor=tk.W, pady=(2, 0))
+        
+        right_column = tk.Frame(content_container, bg=self.bg_color)
+        right_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        self.notebook = ttk.Notebook(
+            right_column,
+            style='Custom.TNotebook'
+        )
         self.notebook.pack(fill=tk.BOTH, expand=True)
         
-        dashboard_frame = tk.Frame(self.notebook, bg=self.bg_color)
+        dashboard_frame = tk.Frame(self.notebook, bg=self.bg_color, padx=5, pady=5)
         self.notebook.add(dashboard_frame, text="Dashboard")
         
         self.weather_text = scrolledtext.ScrolledText(
             dashboard_frame,
             wrap=tk.WORD,
-            font=('Consolas', 10),
+            font=self.mono_font,
             bg=self.card_bg,
             fg=self.text_color,
-            relief='solid',
-            borderwidth=1
+            relief='flat',
+            borderwidth=0,
+            padx=20,
+            pady=20
         )
-        self.weather_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.weather_text.pack(fill=tk.BOTH, expand=True)
         
-        raw_frame = tk.Frame(self.notebook, bg=self.bg_color)
+        self.weather_text.tag_configure("title", foreground=self.accent_color, font=('Consolas', 14, 'bold'))
+        self.weather_text.tag_configure("source", foreground=self.secondary_color, font=('Consolas', 12, 'bold'))
+        self.weather_text.tag_configure("label", foreground=self.muted_text, font=('Consolas', 10))
+        self.weather_text.tag_configure("value", foreground=self.text_color, font=('Consolas', 10, 'bold'))
+        self.weather_text.tag_configure("divider", foreground=self.muted_text)
+        
+        raw_frame = tk.Frame(self.notebook, bg=self.bg_color, padx=5, pady=5)
         self.notebook.add(raw_frame, text="Raw Data")
         
         self.raw_text = scrolledtext.ScrolledText(
             raw_frame,
             wrap=tk.WORD,
-            font=('Consolas', 9),
-            bg='#1e1e1e',
-            fg='#ffffff',
-            relief='solid',
-            borderwidth=1
+            font=self.mono_font,
+            bg='#0d1117',
+            fg='#c9d1d9',
+            relief='flat',
+            borderwidth=0,
+            padx=20,
+            pady=20
         )
-        self.raw_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.raw_text.pack(fill=tk.BOTH, expand=True)
+        
+        status_container = tk.Frame(right_column, bg=self.bg_color, height=40)
+        status_container.pack(fill=tk.X, pady=(15, 0))
+        status_container.pack_propagate(False)
+        
+        status_bar = tk.Frame(status_container, bg=self.card_bg)
+        status_bar.pack(fill=tk.BOTH, expand=True)
         
         self.status_var = tk.StringVar(value="Ready to fetch weather data")
-        status_bar = tk.Label(
-            main_container,
+        status_label = ttk.Label(
+            status_bar,
             textvariable=self.status_var,
-            bg='#e8f4fc',
-            fg='#2c5282',
-            font=('Segoe UI', 9),
-            relief='sunken',
-            anchor=tk.W,
-            padx=10
+            style='Muted.TLabel',
+            padding=(15, 10)
         )
-        status_bar.pack(fill=tk.X, pady=(10, 0))
+        status_label.pack(side=tk.LEFT)
+        
+        self.time_var = tk.StringVar()
+        time_label = ttk.Label(
+            status_bar,
+            textvariable=self.time_var,
+            style='Muted.TLabel',
+            padding=(15, 10)
+        )
+        time_label.pack(side=tk.RIGHT)
+        
+        self.update_time()
+        
+    def update_time(self):
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.time_var.set(current_time)
+        self.root.after(1000, self.update_time)
         
     def fetch_weather(self):
         if self.is_fetching:
@@ -597,7 +750,6 @@ class WeatherAppGUI:
         self.status_var.set("Fetching weather data from APIs...")
         self.weather_text.delete(1.0, tk.END)
         self.raw_text.delete(1.0, tk.END)
-        self.weather_text.insert(tk.END, "Please wait while we gather weather data...\n\n")
         
         thread = threading.Thread(
             target=self._fetch_weather_thread,
@@ -621,7 +773,6 @@ class WeatherAppGUI:
             self.root.after(0, self._update_display, results, report, city)
             
         except Exception as e:
-            logger.error(f"Fetch thread error: {e}")
             self.root.after(0, self._handle_error, str(e))
         finally:
             self.root.after(0, self._fetch_complete)
@@ -630,46 +781,70 @@ class WeatherAppGUI:
         self.weather_text.delete(1.0, tk.END)
         
         if results:
-            display_text = f"WEATHER FOR: {city}\n"
-            display_text += "=" * 50 + "\n\n"
+            self.weather_text.insert(tk.END, f"Weather for {city}\n", "title")
+            self.weather_text.insert(tk.END, "─" * 50 + "\n\n", "divider")
             
             source_colors = {
-                'Open-Meteo': '#2ecc71',
-                'WeatherAPI': '#3498db',
-                'wttr.in': '#9b59b6'
+                'Open-Meteo': self.secondary_color,
+                'WeatherAPI': self.accent_color,
+                'wttr.in': '#8b5cf6'
             }
             
             for source, data in results.items():
-                color = source_colors.get(source, '#333333')
-                display_text += f"Source: {source}\n"
-                display_text += f"  Temperature: {data['temperature']:.1f}°C\n"
-                display_text += f"  Feels like: {data.get('feels_like', data['temperature']):.1f}°C\n"
-                display_text += f"  Conditions: {data['description']}\n"
-                display_text += f"  Humidity: {data.get('humidity', 0):.0f}%\n"
-                display_text += f"  Pressure: {data.get('pressure', 0):.0f} hPa\n"
-                display_text += f"  Wind: {data.get('wind_speed', 0):.1f} m/s\n"
-                display_text += f"  Direction: {data.get('wind_direction', 0):.0f}°\n"
-                display_text += "-" * 35 + "\n\n"
+                color = source_colors.get(source, self.text_color)
+                self.weather_text.tag_configure(f"source_{source}", foreground=color, font=('Consolas', 12, 'bold'))
+                
+                self.weather_text.insert(tk.END, f"{source}\n", f"source_{source}")
+                
+                self.weather_text.insert(tk.END, "Temperature: ", "label")
+                self.weather_text.insert(tk.END, f"{data['temperature']:.1f}°C\n", "value")
+                
+                feels_like = data.get('feels_like', data['temperature'])
+                self.weather_text.insert(tk.END, "Feels like: ", "label")
+                self.weather_text.insert(tk.END, f"{feels_like:.1f}°C\n", "value")
+                
+                self.weather_text.insert(tk.END, "Conditions: ", "label")
+                self.weather_text.insert(tk.END, f"{data['description']}\n", "value")
+                
+                humidity = data.get('humidity', 0)
+                self.weather_text.insert(tk.END, "Humidity: ", "label")
+                self.weather_text.insert(tk.END, f"{humidity:.0f}%\n", "value")
+                
+                pressure = data.get('pressure', 0)
+                self.weather_text.insert(tk.END, "Pressure: ", "label")
+                self.weather_text.insert(tk.END, f"{pressure:.0f} hPa\n", "value")
+                
+                wind_speed = data.get('wind_speed', 0)
+                self.weather_text.insert(tk.END, "Wind Speed: ", "label")
+                self.weather_text.insert(tk.END, f"{wind_speed:.1f} m/s\n", "value")
+                
+                wind_dir = data.get('wind_direction', 0)
+                self.weather_text.insert(tk.END, "Wind Direction: ", "label")
+                self.weather_text.insert(tk.END, f"{wind_dir:.0f}°\n", "value")
+                
+                self.weather_text.insert(tk.END, "\n" + "─" * 40 + "\n\n", "divider")
             
             temps = [data['temperature'] for data in results.values()]
             avg_temp = sum(temps) / len(temps)
             
-            display_text += "\n" + "-" * 47 + "\n"
-            display_text += f"Average Temperature: {avg_temp:.1f}°C\n"
-            display_text += f"Sources: {len(results)} successful\n"
-            display_text += f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            self.weather_text.insert(tk.END, "Summary\n", "title")
+            self.weather_text.insert(tk.END, "Average Temperature: ", "label")
+            self.weather_text.insert(tk.END, f"{avg_temp:.1f}°C\n", "value")
+            self.weather_text.insert(tk.END, "Sources: ", "label")
+            self.weather_text.insert(tk.END, f"{len(results)} successful\n", "value")
+            self.weather_text.insert(tk.END, "Last updated: ", "label")
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.weather_text.insert(tk.END, f"{current_time}\n", "value")
             
             self.status_var.set(f"Successfully fetched data for {city} from {len(results)} sources")
         else:
-            display_text = "No weather data could be retrieved\n"
-            display_text += "\nPossible issues:\n"
-            display_text += "  Check internet connection\n"
-            display_text += "  Verify city name\n"
-            display_text += "  APIs might be temporarily unavailable\n"
+            self.weather_text.insert(tk.END, "No weather data could be retrieved\n\n", "title")
+            self.weather_text.insert(tk.END, "Possible issues:\n", "label")
+            self.weather_text.insert(tk.END, "• Check internet connection\n", "value")
+            self.weather_text.insert(tk.END, "• Verify city name\n", "value")
+            self.weather_text.insert(tk.END, "• APIs might be temporarily unavailable\n", "value")
             
             self.status_var.set("Failed to fetch weather data")
-        
-        self.weather_text.insert(tk.END, display_text)
         
         self.raw_text.delete(1.0, tk.END)
         self.raw_text.insert(tk.END, report)
@@ -678,7 +853,8 @@ class WeatherAppGUI:
     
     def _handle_error(self, error_msg: str):
         self.weather_text.delete(1.0, tk.END)
-        self.weather_text.insert(tk.END, f"Error fetching weather data:\n\n{error_msg}")
+        self.weather_text.insert(tk.END, "Error fetching weather data:\n\n", "title")
+        self.weather_text.insert(tk.END, error_msg, "value")
         self.status_var.set(f"Error: {error_msg}")
     
     def _fetch_complete(self):
@@ -691,8 +867,8 @@ def main():
     app = WeatherAppGUI(root)
     
     root.update_idletasks()
-    width = root.winfo_width()
-    height = root.winfo_height()
+    width = 1200
+    height = 850
     x = (root.winfo_screenwidth() // 2) - (width // 2)
     y = (root.winfo_screenheight() // 2) - (height // 2)
     root.geometry(f'{width}x{height}+{x}+{y}')
